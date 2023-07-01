@@ -107,23 +107,48 @@ impl AnimationClip {
     }
 }
 
+/// Repetition behavior of an animation.
+#[derive(Reflect, Copy, Clone)]
+pub enum RepeatAnimation {
+    /// The animation will never finish.
+    Forever,
+    /// The animation will finish after running once.
+    Never,
+    /// The animation will finish after running "n" times.
+    Count(u32),
+}
+
 #[derive(Reflect)]
 struct PlayingAnimation {
-    repeat: bool,
+    repeat: RepeatAnimation,
     speed: f32,
     elapsed: f32,
     animation_clip: Handle<AnimationClip>,
     path_cache: Vec<Vec<Option<Entity>>>,
+    completions: u32,
 }
 
 impl Default for PlayingAnimation {
     fn default() -> Self {
         Self {
-            repeat: false,
+            repeat: RepeatAnimation::Never,
             speed: 1.0,
             elapsed: 0.0,
             animation_clip: Default::default(),
             path_cache: Vec::new(),
+            completions: 0,
+        }
+    }
+}
+
+impl PlayingAnimation {
+    /// Predicate to check if the animation has finished, based on its repetition behavior and the number of times it has repeated.
+    /// Note: An animation with `RepeatAnimation::Forever` will never finish.
+    pub fn finished(&self) -> bool {
+        match self.repeat {
+            RepeatAnimation::Forever => false,
+            RepeatAnimation::Never => self.completions >= 1,
+            RepeatAnimation::Count(n) => self.completions >= n,
         }
     }
 }
@@ -196,6 +221,11 @@ impl AnimationPlayer {
         self
     }
 
+    /// Predicate to check if the playing animation has finished, according to the repetition behavior.
+    pub fn is_finished(&self) -> bool {
+        self.animation.finished()
+    }
+
     /// Start playing an animation, resetting state of the player, unless the requested animation is already playing.
     /// If `transition_duration` is set, this will use a linear blending
     /// between the previous and the new animation to make a smooth transition
@@ -221,13 +251,13 @@ impl AnimationPlayer {
 
     /// Set the animation to repeat
     pub fn repeat(&mut self) -> &mut Self {
-        self.animation.repeat = true;
+        self.animation.repeat = RepeatAnimation::Forever;
         self
     }
 
     /// Stop the animation from repeating
     pub fn stop_repeating(&mut self) -> &mut Self {
-        self.animation.repeat = false;
+        self.animation.repeat = RepeatAnimation::Never;
         self
     }
 
@@ -438,7 +468,14 @@ fn apply_animation(
             animation.elapsed += time.delta_seconds() * animation.speed;
         }
         let mut elapsed = animation.elapsed;
-        if animation.repeat {
+
+        if (elapsed > animation_clip.duration && animation.speed > 0.0)
+            || (elapsed < 0.0 && animation.speed < 0.0)
+        {
+            animation.completions += 1;
+        }
+
+        if elapsed >= animation_clip.duration {
             elapsed %= animation_clip.duration;
         }
         if elapsed < 0.0 {
